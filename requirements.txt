@@ -1,0 +1,4 @@
+cloudscraper==1.2.68
+pygame==2.1.2
+pyttsx3==2.90
+SpeechRecognition==3.9.0
