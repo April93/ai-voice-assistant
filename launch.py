@@ -177,6 +177,9 @@ def playchime(pingpong="ping"):
 if moegoe == False:
 	engine = pyttsx3.init()
 	voices = engine.getProperty('voices')
+	if len(voices) == 0:
+		print("No TTS voices detected. Please install a TTS voice on your OS.")
+		sys.exit(2)
 	engine.setProperty('voice', voices[voice].id)
 	engine.save_to_file(bootmsg, "temp.wav")
 	engine.runAndWait();
