@@ -2,21 +2,38 @@
 import speech_recognition as sr
 #pyttsx3 is our tts engine
 import pyttsx3
+#Load other TTS
+#from TTS.api import TTS
+import mymoegoe.tts as mytts
 #Pygame is used to play the wav audio files that pyttsx3 generates
-import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-from pygame import mixer, _sdl2 as devices
+# import os
+# os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+# from pygame import mixer, _sdl2 as devices
 #These are tools used for interfacing with youchat and other data. json, regex, and cloudflare scraper
 import json
 import cloudscraper
 import re
 import random
+import threading
+#Ooba Reqs
+import requests
+#Character Card Reqs
+from PIL import Image
+from PIL.ExifTags import TAGS
+import base64
 #terminal arg libs
 import sys
 import getopt
+import time
+#Needed for piping to vbcable and playing TTS
+import sounddevice as sd
+import soundfile as sf
+import numpy as np
 #--------------------------------------
 argsv = sys.argv[1:]
-options, args = getopt.getopt(argsv, 'h',["vbcable", "voiceinput", "pc=", "pcaschat", "caphistory=", "voice=", "voices", "wakeword=", "alwayslisten"])
+options, args = getopt.getopt(argsv, 'hv',
+	["vbcable", "voiceinput", "pc=", "pcaschat", "caphistory=", "voice=", "voices", "wakeword=", 
+	"alwayslisten", "ooba", "vosk", "chara=", "moegoe", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel='])
 
 #Config variables
 vbcable = False
@@ -28,6 +45,16 @@ caphistory = 4
 voice = 0
 alwayslisten = False
 waketext = ""
+ooba = False
+vosk = False
+moegoe = False
+wakeprompt = False
+wakeping = True
+charafilename = ""
+speed = 1 
+bootmsg = "Booting Up"
+mgmodel = "g"
+verbose = False
 
 for opt, arg in options:
 	if opt == "-h":
@@ -40,6 +67,16 @@ for opt, arg in options:
 		print("--voices: List voices on your computer.")
 		print("--wakeword='string': Sets the wake word when using voice input.")
 		print("--alwayslisten: Always listen for input, not using a wake word.")
+		print("--ooba: Use local oobabooga webui as LLM instead of YouChat.")
+		print("--vosk: Use local vosk as STT instead of Google.")
+		print("--chara='filename': Load tavernai character card or oobabooga character json file.")
+		print("--moegoe: Use moegoe as TTS instead of default TTS.")
+		print("--bootmsg='string': What to say when booting up.")
+		print("--wakeprompt: Like alwayslisten, but doesn't prompt unless wakeword is included.")
+		print("--nowakeping: Doesn't ping when starting to listen for wake word")
+		print("--voicespeed=number: Speed of moegoe tts. Higher=slower. default is 1.")
+		print("--mgmodel='filename': set the filename of the moegoe model. default is g")
+		print("-v: Print debug info.")
 		sys.exit(2)
 	elif opt == '--vbcable':
 		vbcable = True
@@ -63,30 +100,101 @@ for opt, arg in options:
 		wakeword = arg
 	elif opt == '--alwayslisten':
 		alwayslisten = True
+	elif opt == "--ooba":
+		ooba = True
+	elif opt == "--vosk":
+		vosk = True
+	elif opt == "--chara":
+		charafilename = arg
+	elif opt == "--moegoe":
+		moegoe = True
+	elif opt == "--bootmsg":
+		bootmsg = arg
+	elif opt == "--wakeprompt":
+		wakeprompt = True
+	elif opt == "--nowakeping":
+		wakeping = False
+	elif opt == "--voicespeed":
+		speed = float(arg)
+	elif opt == "--mgmodel":
+		mgmodel = arg
+	elif opt == "-v":
+		verbose = True
+
+
+# Find VB-Cable device IDs
+vbcable_output = None
+vbcable_input = None
+if vbcable:
+	for device in sd.query_devices():
+		if 'CABLE Output' in device['name'] and device['max_input_channels'] == 2 and vbcable_output == None:
+			if verbose:
+				print("Found Cable Output.", device['name'], device['index'])
+			vbcable_output = device["index"]
+		if 'CABLE Input' in device['name'] and device['max_output_channels'] == 2 and vbcable_input == None:
+			if verbose:
+				print("Found Cable Input.", device['name'], device['index'])
+			vbcable_input = device["index"]
+
+#New function to load and play the tts outputs. Check for vbcable vs speaker
+def playaudio():
+	audiofile = "temp.wav"
+	data, fs = sf.read(audiofile, dtype='float32')
+	data_stereo = np.tile(data, (2, 1)).T.copy(order='C')
+	delay = int(fs * 0.2)  # 100ms delay
+	zeros = np.zeros((delay, 2))
+	sd.play(zeros, fs, blocking=True, device=sd.default.device)
+	sd.play(data, fs, device=sd.default.device)
+	if vbcable:
+		with sd.OutputStream(device=vbcable_input,
+							samplerate=fs,
+							channels=2) as stream:
+			stream.write(data_stereo)
+	sd.wait()
+def playchime(pingpong="ping"):
+	data, fs = sf.read(pingpong+".wav", dtype='float32')
+	sd.play(data, fs, device=sd.default.device)
 
 #Here we initialize python's audio output
 #It checks to see if we enabled vb-cable to pipe the audio to vmagicmirror
 #Be sure to turn on listening to the vb-cable mic if you wish to hear the ai speak, otherwise it's silent
-if vbcable:
-	mixer.init(devicename = "CABLE Input (VB-Audio Virtual Cable)")
-else:
-	mixer.init()
+# if vbcable:
+# 	mixer.init(devicename = "CABLE Input (VB-Audio Virtual Cable)")
+# else:
+# 	mixer.init()
 #a debug print to check our audio devices
 #print("Outputs:", devices.audio.get_audio_device_names()[0])
 
+
+#Outdated TTS model
+#print(TTS.list_models())
+#model_name = TTS.list_models()[7]
+# Init TTS
+#tts = TTS(model_name)
+
 #Here we initialize the tts with a default boot message
 #voices[2].id is to get the voice we want.
-engine = pyttsx3.init()
-voices = engine.getProperty('voices')
-engine.setProperty('voice', voices[voice].id)
-engine.save_to_file("Booting Up", "temp.wav")
-engine.runAndWait();
-mixer.music.load("temp.wav")
-mixer.music.play()
+if moegoe == False:
+	engine = pyttsx3.init()
+	voices = engine.getProperty('voices')
+	engine.setProperty('voice', voices[voice].id)
+	engine.save_to_file(bootmsg, "temp.wav")
+	engine.runAndWait();
+	playaudio()
 #--------------------
 
+if moegoe == True:
+	mytts.loadtts(mgmodel)
+	mytts.tts(bootmsg, voice=voice, speed=speed)
+	playaudio()
+
+#Load sfx
+# ping = mixer.Sound("ping.wav")
+# pong = mixer.Sound("pong.wav")
+
 #Initialize the cloudflare scraper that we use for youchat requests
-scraper = cloudscraper.create_scraper(ecdhCurve='secp384r1')
+if not ooba:
+	scraper = cloudscraper.create_scraper(ecdhCurve='secp384r1')
 
 #New traceid function. This fetches the needed traceid for youchat to function
 def getinitialtraceid():
@@ -109,8 +217,9 @@ def getinitialtraceid():
 	first_capture_group = match.group(1)
 	#print("traceid:", first_capture_group)
 	return first_capture_group
-traceid = getinitialtraceid()
-randuuid = str(random.random())[2:]
+if not ooba:
+	traceid = getinitialtraceid()
+	randuuid = str(random.random())[2:]
 #print("Random UUID:", randuuid)
 #---------------------------
 
@@ -170,19 +279,234 @@ def sendq(question):
 	chat.append({"question":'"'+question+'"', "answer":'"'+output+'"'})
 	return output
 
+#Initialize Character Persona Details for Ooba LLM
+yourname = "You"
+charactername = "Bot"
+characterpersona = ""
+worldscenario = "You are chatting with Bot, your AI assistant."
+exampledialogue = ""
+exampledialogue = re.sub(r'{{char}}', charactername, exampledialogue)
+exampledialogue = re.sub(r'{{user}}', yourname, exampledialogue)
+greeting = ""
+
+def loadcharacard(filename):
+	global charactername, characterpersona, worldscenario, exampledialogue, greeting
+	if verbose: 
+		print("PNG/WEBP character file loading...")
+	# load the image
+	img = Image.open(filename)
+	exif_data = img._getexif()
+	img.load()
+	chara = ""
+	if filename[-4:] == ".png":
+		chara = img.info["chara"]
+		decoded_bytes = base64.b64decode(chara)
+		decoded_string = decoded_bytes.decode('utf-8')
+		chara = decoded_string
+	if filename[-4:] == "webp":
+		for tag_id, value in exif_data.items():
+			tag = TAGS.get(tag_id, tag_id)
+			if tag == "UserComment":
+				chara = value[8:]
+
+	charajson = json.loads(chara)
+	print("Loading "+charajson['name'])
+	charactername = charajson['name']
+	characterpersona = charajson['description']+"\nPersonality: "+charajson['personality']
+	characterpersona = re.sub(r'{{char}}', charactername, characterpersona)
+	characterpersona = re.sub(r'{{user}}', yourname, characterpersona)
+	worldscenario = charajson['scenario']
+	worldscenario = re.sub(r'{{char}}', charactername, worldscenario)
+	worldscenario = re.sub(r'{{user}}', yourname, worldscenario)
+	greeting = charajson['first_mes']
+	greeting = re.sub(r'{{char}}', charactername, greeting)
+	greeting = re.sub(r'{{user}}', yourname, greeting)
+	exampledialogue = charajson['mes_example']
+	exampledialogue = re.sub(r'{{char}}', charactername, exampledialogue)
+	exampledialogue = re.sub(r'{{user}}', yourname, exampledialogue)
+
+def loadoobacharjson(filename):
+	global charactername, characterpersona, worldscenario, exampledialogue, greeting
+	if verbose: 
+		print("JSON character file loading...")
+	with open(filename, encoding="utf-8") as f:
+		data = json.load(f)
+		print("Loading "+data['char_name'])
+		charactername = data['char_name']
+		characterpersona = data['char_persona']
+		characterpersona = re.sub(r'{{char}}', charactername, characterpersona)
+		characterpersona = re.sub(r'{{user}}', yourname, characterpersona)
+		worldscenario = data['world_scenario']
+		worldscenario = re.sub(r'{{char}}', charactername, worldscenario)
+		worldscenario = re.sub(r'{{user}}', yourname, worldscenario)
+		greeting = data['char_greeting']
+		greeting = re.sub(r'{{char}}', charactername, greeting)
+		greeting = re.sub(r'{{user}}', yourname, greeting)
+		exampledialogue = data['example_dialogue']
+		exampledialogue = re.sub(r'{{char}}', charactername, exampledialogue)
+		exampledialogue = re.sub(r'{{user}}', yourname, exampledialogue)
+
+def loadchara(filename):
+	if verbose:
+		print("Chara file extension:", filename[-4:])
+	if filename[-4:] == "json":
+		loadoobacharjson(filename)
+	elif filename[-4:] == ".png" or filename[-4:] == "webp":
+		loadcharacard(filename)
+	else:
+		print("Could not detect character format...")
+
+if charafilename != "":
+	loadchara(charafilename)
+
+if greeting != "":
+	print(charactername+": "+greeting)
+	chat.append({"question":'', "answer":greeting})
+
+#oobasendq is the oobabooga api request. Just enter prompt for the parameter and we get the response back
+def oobasendq(question):
+	global chat
+	prompt = ""
+	#Handle legacy prompt context
+	if promptcontextaschat:
+		chat.append({"question":'"'+promptcontext+'"', "answer":''})
+	else:
+		prompt = promptcontext+"\n"
+
+	#Set stopping strings. This tells LLM to stop writing.
+	stopping_strings = ["\n"+yourname, "\n"+charactername]
+	
+	#characterpersona = "You are chatting with Bot. Bot is an AI assistant that helps answer your questions."
+
+	#Add Character Context
+	if characterpersona != "":
+		prompt += charactername+"'s Persona: "+characterpersona+"\n"
+	if worldscenario != "":
+		prompt += "Scenario: "+worldscenario+"\n"
+	if exampledialogue != "":
+		prompt += "<START>"+"\n"+exampledialogue+"\n"
+	if characterpersona != "" or worldscenario != "" or exampledialogue != "":
+		prompt += "<START>"
+
+	#Add Chat History to Prompt
+	for ch in chat:
+		if ch["question"] != "":
+			prompt += '\n'+yourname+': '+ch["question"]
+		if ch["answer"] != "":
+			prompt += '\n'+charactername+': '+ch["answer"]
+
+	#Add newest chat to prompt
+	prompt += '\n'+yourname+': '
+	prompt += question
+	prompt += '\n'+charactername+': '
+	#print(prompt)
+	#Send the request
+	data = {"prompt": prompt, "stopping_strings": stopping_strings, "temperature": 0.7, "rep_pen": 1.18, "top_p":1}
+	response = requests.post('http://127.0.0.1:5000/api/v1/generate', data=json.dumps(data))
+	if response.status_code == 200:
+
+		#Get the output from the response
+		if verbose:
+			print(response.content)
+		jsondata = json.loads(response.content.decode('utf-8'))
+		output = str(jsondata['results'][0]['text']).strip()
+		# print("---")
+		# print("Output: ",output)
+		# print("---")
+		#output = output.split(yourname+":", 1)[0]
+
+		#Append message to chat history
+		if caphistory >= 0:
+			if len(chat) > caphistory:
+				chat = chat[:0-caphistory]
+		chat.append({"question":'"'+question+'"', "answer":'"'+output+'"'})
+
+		return output
+	else:
+		return "Error"
+
+
 #Wait for speech detected by google
-def getaudiogoogle():
+# def getaudiogoogle():
+# 	global ping
+# 	text = ""
+# 	firstit = True
+# 	while text == "":
+# 		r = sr.Recognizer()
+# 		with sr.Microphone() as source:
+# 			r.adjust_for_ambient_noise(source)
+# 			if firstit:
+# 				if (wake and wakeping) or (not wake):
+# 					playchime("ping")
+# 				firstit = False
+# 			print("Listening for Google!")
+# 			audio = r.listen(source)
+# 		try:
+# 			text = r.recognize_google(audio)
+# 			text = text.lower()
+# 		except:
+# 			print("Failed to recognize")
+# 			text = ""
+# 	return text
+
+# #Wait for speech detected by vosk
+# def getaudiovosk():
+# 	global ping
+# 	text = ""
+# 	firstit = True
+# 	while text == "":
+# 		r = sr.Recognizer()
+# 		with sr.Microphone() as source:
+# 			r.adjust_for_ambient_noise(source)
+# 			if firstit:
+# 				if (wake and wakeping) or (not wake):
+# 					playchime("ping")
+# 				firstit = False
+# 			print("Listening for Vosk!")
+# 			audio = r.listen(source)
+# 		try:
+# 			text = r.recognize_vosk(audio)
+# 			text = text.lower()
+# 		except:
+# 			print("Failed to recognize")
+# 			text = ""
+# 	return json.loads(text)["text"]
+
+def getaudiovosknew(r, m, wake=False):
+	global ping
+	print("New Vosk Recognizer")
 	text = ""
 	firstit = True
 	while text == "":
-		r = sr.Recognizer()
-		with sr.Microphone() as source:
-			if firstit:
-				mixer.music.unload()
-				mixer.music.load("ping.mp3")
+		with m as source:
 			r.adjust_for_ambient_noise(source)
 			if firstit:
-				mixer.music.play()
+				if (wake and wakeping) or (not wake):
+					playchime("ping")
+				firstit = False
+			print("Listening for Vosk!")
+			audio = r.listen(source)
+		try:
+			text = r.recognize_vosk(audio)
+			text = text.lower()
+		except:
+			print("Failed to recognize")
+			text = ""
+	output = json.loads(text)["text"]
+	print("Detected speech:", output)
+	return output
+
+def getaudiogooglenew(r, m, wake=False):
+	global ping 
+	print("New Google Recognizer")
+	text = ""
+	firstit = True
+	while text == "":
+		with m as source:
+			r.adjust_for_ambient_noise(source)
+			if firstit:
+				if (wake and wakeping) or (not wake):
+					playchime("ping")
 				firstit = False
 			print("Listening for Google!")
 			audio = r.listen(source)
@@ -192,85 +516,161 @@ def getaudiogoogle():
 		except:
 			print("Failed to recognize")
 			text = ""
+	print("Detected speech:", text)
 	return text
 
 #Main function. Two different options: whether we wish to use text input or voice
 if textinput:
 	while True:
 		#get input string
-		input_string = input("User: ")
+		input_string = input(yourname+": ")
 		combinedprompt = promptcontext+input_string
 		if promptcontextaschat:
 			combinedprompt = input_string
-		out = sendq(combinedprompt)
-		out = re.sub(r'\[.+?\]\(.+?\)', '', out)
-		print("YouBot:", out)
-		mixer.music.unload()
-		engine.save_to_file(out, "temp.wav")
-		engine.runAndWait();
-		mixer.music.load("temp.wav")
-		mixer.music.play()
+		start_time = time.time()
+
+		#Send prompt to LLM
+		if ooba:
+			out = oobasendq(input_string)
+		else:
+			#Youchat
+			out = sendq(combinedprompt)
+			out = re.sub(r'\[.+?\]\(.+?\)', '', out)
+
+		#Print response
+		print(charactername+":", out)
+
+		#Clear out string to ensure TTS doesn't crash
+		out = re.sub("\n", "", out)
+		out = re.sub("[\"\']", "", out)
+		out = re.sub("[^\x00-\x7F]+", "", out)
+		out = re.sub("[<>]", "", out)
+		out = re.sub("-", " - ", out)
+		if out and out != "":
+			# Text to speech to a file
+			#tts.tts_to_file(text=out, file_path="temp.wav")
+			if moegoe == False:
+				engine.save_to_file(out, "temp.wav")
+				engine.runAndWait();
+			else:
+				mytts.tts(out, "temp.wav", voice=voice, speed=speed)
+			
+			#Calculate and print time if verbose
+			end_time = time.time()
+			elapsed_time = end_time - start_time
+			if verbose:
+				print("Elapsed time: ", elapsed_time, "seconds")
+			threadaudio = threading.Thread(target=playaudio)
+			threadaudio.start()
+			threadaudio.join()
+			#playaudio()
+			#mixer.music.load("temp.wav")
+			#mixer.music.play()
 else:
 	stop_listening = None
+	#start microphone recognition
+	r = sr.Recognizer()
+	m = sr.Microphone()
+	# def callback(recognizer, audio):
+	# 	global waketext
+	# 	#recognizer.adjust_for_ambient_noise(source)
+	# 	try:
+	# 		if vosk:
+	# 			waketext = recognizer.recognize_vosk(audio)
+	# 			waketext = json.loads(waketext)["text"]
+	# 		else:
+	# 			waketext = recognizer.recognize_google(audio)
+	# 		waketext = waketext.lower()
+	# 		if verbose:
+	# 			print("Wake Word Check: {}".format(waketext))
+	# 	except:
+	# 		waketext = ""
+	# 		print("Failed to recognize!")	
+	with m as source:
+		r.adjust_for_ambient_noise(source)
+	#stop_listening = r.listen_in_background(m, callback)
 	while True:
 
 		#Listen for Wake Word
-		waketext = ""
-		if stop_listening:
-			stop_listening(wait_for_stop=False)
-		#start microphone recognition
-		r = sr.Recognizer()
-		waketext = ""
-		def callback(recognizer, audio):
-			global waketext
-			try:
-				waketext = r.recognize_google(audio)
-				waketext = waketext.lower()
-				print("You said: {}".format(waketext))
-			except:
-				waketext = ""
-				print("Failed to recognize!")	
+		# waketext = ""
+		# if stop_listening:
+		# 	stop_listening(wait_for_stop=False)
 		
-		m = sr.Microphone()
-		with m as source:
-			r.adjust_for_ambient_noise(source)
-		stop_listening = r.listen_in_background(m, callback)
-
+		waketext = ""
+		
+		def listenwake():
+			global waketext, r, m
+			#print(r, m)
+			if vosk:
+				waketext = getaudiovosknew(r,m, True)
+			else:
+				waketext = getaudiogooglenew(r,m, True)
+		
 		if alwayslisten == True:
 			while waketext == "":
+				listenwake()
 				continue
 			textg = waketext
+			playchime("pong")
 		else:
 			while wakeword not in waketext:
+				listenwake()
 				continue
-			waketext = ""
+			if wakeprompt:
+				textg = waketext
+			else:
+				waketext = ""
 
 		#stop_listening(wait_for_stop=False)
 		#----------------------------------------
 
 
 		#Listen for Prompt
-		if alwayslisten == False:
-			textg = getaudiogoogle()
+		if alwayslisten == False and wakeprompt == False:
+			if vosk:
+				textg = getaudiovosknew(r,m)
+			else:
+				textg = getaudiogooglenew(r,m)
+			playchime("pong")
 		#----------------------
 
 		#Send prompt to youchat and print output
-		print("You:", textg)
+		print(yourname+":", textg)
+		start_time = time.time()
 		combinedprompt = promptcontext+textg
 		if promptcontextaschat:
 			combinedprompt = textg
-		out = sendq(combinedprompt)
-		out = re.sub(r'\[.+?\]\(.+?\)', '', out)
-		print("YouBot:", out)
+		if ooba:
+			out = oobasendq(textg)
+		else:
+			#Youchat
+			out = sendq(combinedprompt)
+			out = re.sub(r'\[.+?\]\(.+?\)', '', out)
+		print(charactername+":", out)
 		#----------------------
 
 		#TTS Response
-		mixer.music.unload()
-		engine.save_to_file(out, "temp.wav")
-		engine.runAndWait();
-		mixer.music.load("temp.wav")
-		mixer.music.play()
-		while mixer.music.get_busy() == True:
-			continue
-		mixer.music.unload()
+		#mixer.music.unload()
+		#Clear out string to ensure TTS doesn't crash
+		out = re.sub("\n", "", out)
+		out = re.sub("\"", "", out)
+		out = re.sub("[^\x00-\x7F]+", "", out)
+		out = re.sub("[<>]", "", out)
+		out = re.sub("-", " - ", out)
+		if out and out != "":
+			if moegoe == False:
+				engine.save_to_file(out, "temp.wav")
+				engine.runAndWait();
+			else:
+				mytts.tts(out, "temp.wav", voice=voice, speed=speed)
+			
+			#Calculate and print time if verbose
+			end_time = time.time()
+			elapsed_time = end_time - start_time
+			if verbose:
+				print("Elapsed time: ", elapsed_time, "seconds")
+			threadaudio = threading.Thread(target=playaudio)
+			threadaudio.start()
+			threadaudio.join()
+			#playaudio()
 		#-------------------
