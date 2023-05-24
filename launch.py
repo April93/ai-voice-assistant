@@ -29,6 +29,7 @@ import time
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
+import os
 #--------------------------------------
 argsv = sys.argv[1:]
 options, args = getopt.getopt(argsv, 'hv',
@@ -55,6 +56,9 @@ speed = 1
 bootmsg = "Booting Up"
 mgmodel = "g"
 verbose = False
+
+script_path = os.path.abspath(__file__)
+directory = os.path.dirname(script_path)
 
 for opt, arg in options:
 	if opt == "-h":
@@ -138,21 +142,24 @@ if vbcable:
 
 #New function to load and play the tts outputs. Check for vbcable vs speaker
 def playaudio():
-	audiofile = "temp.wav"
-	data, fs = sf.read(audiofile, dtype='float32')
-	data_stereo = np.tile(data, (2, 1)).T.copy(order='C')
-	delay = int(fs * 0.2)  # 100ms delay
-	zeros = np.zeros((delay, 2))
-	sd.play(zeros, fs, blocking=True, device=sd.default.device)
-	sd.play(data, fs, device=sd.default.device)
-	if vbcable:
-		with sd.OutputStream(device=vbcable_input,
-							samplerate=fs,
-							channels=2) as stream:
-			stream.write(data_stereo)
-	sd.wait()
+	audiofile = os.path.join(directory,"temp.wav")
+	if os.path.isfile(audiofile):
+		data, fs = sf.read(audiofile, dtype='float32')
+		data_stereo = np.tile(data, (2, 1)).T.copy(order='C')
+		delay = int(fs * 0.2)  # 100ms delay
+		zeros = np.zeros((delay, 2))
+		sd.play(zeros, fs, blocking=True, device=sd.default.device)
+		sd.play(data, fs, device=sd.default.device)
+		if vbcable:
+			with sd.OutputStream(device=vbcable_input,
+								samplerate=fs,
+								channels=2) as stream:
+				stream.write(data_stereo)
+		sd.wait()
+	else:
+		print("Generated TTS audio temp.wav not found!")
 def playchime(pingpong="ping"):
-	data, fs = sf.read(pingpong+".wav", dtype='float32')
+	data, fs = sf.read(os.path.join(directory,pingpong+".wav"), dtype='float32')
 	sd.play(data, fs, device=sd.default.device)
 
 #Here we initialize python's audio output
@@ -181,14 +188,14 @@ if moegoe == False:
 		print("No TTS voices detected. Please install a TTS voice on your OS.")
 		sys.exit(2)
 	engine.setProperty('voice', voices[voice].id)
-	engine.save_to_file(bootmsg, "temp.wav")
+	engine.save_to_file(bootmsg, os.path.join(directory,"temp.wav"))
 	engine.runAndWait();
 	playaudio()
 #--------------------
 
 if moegoe == True:
 	mytts.loadtts(mgmodel)
-	mytts.tts(bootmsg, voice=voice, speed=speed)
+	mytts.tts(bootmsg, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
 	playaudio()
 
 #Load sfx
@@ -286,7 +293,7 @@ def sendq(question):
 yourname = "You"
 charactername = "Bot"
 characterpersona = ""
-worldscenario = "You are chatting with Bot, your AI assistant."
+worldscenario = "You are chatting with Bot, your AI assistant. Bot responds only with one or two sentences and keeps responses brief."
 exampledialogue = ""
 exampledialogue = re.sub(r'{{char}}', charactername, exampledialogue)
 exampledialogue = re.sub(r'{{user}}', yourname, exampledialogue)
@@ -365,6 +372,17 @@ if charafilename != "":
 if greeting != "":
 	print(charactername+": "+greeting)
 	chat.append({"question":'', "answer":greeting})
+	out = re.sub("\n", "", greeting)
+	out = re.sub("[\"\']", "", out)
+	out = re.sub("[^\x00-\x7F]+", "", out)
+	out = re.sub("[<>]", "", out)
+	out = re.sub("-", " - ", out)
+	if moegoe == False:
+		engine.save_to_file(out, os.path.join(directory,"temp.wav"))
+		engine.runAndWait();
+	if moegoe == True:
+		mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
+	playaudio()
 
 #oobasendq is the oobabooga api request. Just enter prompt for the parameter and we get the response back
 def oobasendq(question):
@@ -553,10 +571,10 @@ if textinput:
 			# Text to speech to a file
 			#tts.tts_to_file(text=out, file_path="temp.wav")
 			if moegoe == False:
-				engine.save_to_file(out, "temp.wav")
+				engine.save_to_file(out, os.path.join(directory,"temp.wav"))
 				engine.runAndWait();
 			else:
-				mytts.tts(out, "temp.wav", voice=voice, speed=speed)
+				mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
 			
 			#Calculate and print time if verbose
 			end_time = time.time()
@@ -662,10 +680,10 @@ else:
 		out = re.sub("-", " - ", out)
 		if out and out != "":
 			if moegoe == False:
-				engine.save_to_file(out, "temp.wav")
+				engine.save_to_file(out, os.path.join(directory,"temp.wav"))
 				engine.runAndWait();
 			else:
-				mytts.tts(out, "temp.wav", voice=voice, speed=speed)
+				mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
 			
 			#Calculate and print time if verbose
 			end_time = time.time()
