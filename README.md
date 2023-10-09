@@ -9,9 +9,13 @@ I hooked up you.com's youchat into speech to text and text to speech services, t
 
 You can use this with [Oobabooga's Web UI](https://github.com/oobabooga/text-generation-webui/) for a local LLM (instead of Youchat) by launching with `--ooba`. When using this, you can also load in TavernAI png/webp or Pygmalion/Oobabooga json character cards with `--chara filename.png`. The script assumes you are running oobabooga with `--extensions api` and on port 5000 (default).
 
+### Local language model with LM Studio
+
+You can use this with [LM Studio](https://lmstudio.ai/) for a local LLM (instead of Youchat) by launching with `--openai`. When using this, you can also load in TavernAI png/webp or Pygmalion/Oobabooga json character cards with `--chara filename.png`. The script assumes you're running LM Studio and have started the local inference server on port 1234 (default).
+
 ### Local speech recognition with Vosk
 
-Use `--vosk` to run with local vosk speech recognition instead of the default google one. Make sure you download a model from [here](https://alphacephei.com/vosk/models) and put it in the folder with it named as `model`. Make sure to run with `--voiceinput` when using speech to text input.
+Use `--vosk` to run with vosk speech recognition instead of the default whisper one. Make sure you download a model from [here](https://alphacephei.com/vosk/models) and put it in the folder with it named as `model`. Make sure to run with `--voiceinput` when using speech to text input.
 
 ### Moegoe TTS
 
@@ -35,7 +39,9 @@ For windows and mac it's possible to install [VB-Cable](https://vb-audio.com/Cab
 |`--wakeword='string'`|Sets the wake word when using voice input.|
 |`--alwayslisten`|Always listen for input, not using a wake word.|
 |`--ooba`|Use local oobabooga webui as LLM instead of YouChat.|
-|`--vosk`|Use local vosk as STT instead of Google.|
+|`--openai`|Use openai api as LLM instead of YouChat.|
+|`--vosk`|Use local vosk as STT.|
+|`--googlestt`|Use google's online service as STT.|
 |`--chara='filename'`|Load tavernai character card or oobabooga character json file.|
 |`--moegoe`|Use moegoe as TTS instead of default TTS.|
 |`--bootmsg='string'`|What to say when booting up.|
