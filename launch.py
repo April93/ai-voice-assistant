@@ -1,5 +1,7 @@
 #Speech recognition library, very important
 import speech_recognition as sr
+#Alternative speech recognition with whisper
+from whisper_mic.whisper_mic import WhisperMic
 #pyttsx3 is our tts engine
 import pyttsx3
 #Load other TTS
@@ -36,7 +38,7 @@ import os
 argsv = sys.argv[1:]
 options, args = getopt.getopt(argsv, 'hv',
 	["vbcable", "voiceinput", "pc=", "pcaschat", "caphistory=", "voice=", "voices", "wakeword=", 
-	"alwayslisten", "ooba", "openai", "vosk", "chara=", "moegoe", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel='])
+	"alwayslisten", "ooba", "openai", "vosk", "googlestt", "chara=", "moegoe", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel='])
 
 #Config variables
 vbcable = False
@@ -51,6 +53,7 @@ waketext = ""
 ooba = False
 openaiapi = False
 vosk = False
+googlestt = False
 moegoe = False
 wakeprompt = False
 wakeping = True
@@ -81,7 +84,8 @@ for opt, arg in options:
 		print("--alwayslisten: Always listen for input, not using a wake word.")
 		print("--ooba: Use local oobabooga webui as LLM instead of YouChat.")
 		print("--openai: Use openai api as LLM instead of YouChat.")
-		print("--vosk: Use local vosk as STT instead of Google.")
+		print("--vosk: Use local vosk as STT.")
+		print("--googlestt: Use google's online service as STT.")
 		print("--chara='filename': Load tavernai character card or oobabooga character json file.")
 		print("--moegoe: Use moegoe as TTS instead of default TTS.")
 		print("--bootmsg='string': What to say when booting up.")
@@ -119,6 +123,8 @@ for opt, arg in options:
 		openaiapi = True
 	elif opt == "--vosk":
 		vosk = True
+	elif opt == "--googlestt":
+		googlestt = True
 	elif opt == "--chara":
 		charafilename = arg
 	elif opt == "--moegoe":
@@ -635,8 +641,11 @@ if textinput:
 else:
 	stop_listening = None
 	#start microphone recognition
-	r = sr.Recognizer()
-	m = sr.Microphone()
+	if vosk or googlestt:
+		r = sr.Recognizer()
+		m = sr.Microphone()
+	else:
+		mic = WhisperMic(model="base.en")
 	# def callback(recognizer, audio):
 	# 	global waketext
 	# 	#recognizer.adjust_for_ambient_noise(source)
@@ -651,9 +660,11 @@ else:
 	# 			print("Wake Word Check: {}".format(waketext))
 	# 	except:
 	# 		waketext = ""
-	# 		print("Failed to recognize!")	
-	with m as source:
-		r.adjust_for_ambient_noise(source)
+	# 		print("Failed to recognize!")
+
+	if vosk or googlestt:
+		with m as source:
+			r.adjust_for_ambient_noise(source)
 	#stop_listening = r.listen_in_background(m, callback)
 	while True:
 
@@ -669,15 +680,22 @@ else:
 			#print(r, m)
 			if vosk:
 				waketext = getaudiovosknew(r,m, True)
-			else:
+			elif googlestt:
 				waketext = getaudiogooglenew(r,m, True)
+			else:
+				waketext = mic.listen()
+				waketext = waketext.lower()
+				print("Detected speech:", waketext)
+				if wakeping:
+					playchime("ping")
 		
 		if alwayslisten == True:
 			while waketext == "":
 				listenwake()
 				continue
 			textg = waketext
-			playchime("pong")
+			if wakeping:
+				playchime("pong")
 		else:
 			while wakeword not in waketext:
 				listenwake()
@@ -695,9 +713,12 @@ else:
 		if alwayslisten == False and wakeprompt == False:
 			if vosk:
 				textg = getaudiovosknew(r,m)
-			else:
+			elif googlestt:
 				textg = getaudiogooglenew(r,m)
-			playchime("pong")
+			else:
+				textg = mic.listen()
+			if wakeping:
+				playchime("pong")
 		#----------------------
 
 		#Send prompt to youchat and print output
