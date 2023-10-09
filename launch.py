@@ -67,6 +67,7 @@ verbose = False
 openai.api_base='http://localhost:1234/v1'
 # Put in an empty API Key for LM stuido
 openai.api_key=''
+openaimodel = "local model"
 
 script_path = os.path.abspath(__file__)
 directory = os.path.dirname(script_path)
@@ -448,7 +449,7 @@ def openaisendq(question):
 	#formatted_prompt = f"{yourname}: {question}\n{charactername}:"
 	messages = [{"role": "user", "content": prompt}]
 	response = openai.ChatCompletion.create(
-		model="local model",
+		model=openaimodel,
 		messages=messages,
 		stop=stopping_strings,
 		temperature=0.0
