@@ -17,6 +17,8 @@ import random
 import threading
 #Ooba Reqs
 import requests
+#LM Studio and Other OpenAI compatibles Reqs
+import openai
 #Character Card Reqs
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -34,7 +36,7 @@ import os
 argsv = sys.argv[1:]
 options, args = getopt.getopt(argsv, 'hv',
 	["vbcable", "voiceinput", "pc=", "pcaschat", "caphistory=", "voice=", "voices", "wakeword=", 
-	"alwayslisten", "ooba", "vosk", "chara=", "moegoe", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel='])
+	"alwayslisten", "ooba", "openai", "vosk", "chara=", "moegoe", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel='])
 
 #Config variables
 vbcable = False
@@ -47,6 +49,7 @@ voice = 0
 alwayslisten = False
 waketext = ""
 ooba = False
+openaiapi = False
 vosk = False
 moegoe = False
 wakeprompt = False
@@ -56,6 +59,11 @@ speed = 1
 bootmsg = "Booting Up"
 mgmodel = "g"
 verbose = False
+
+# Put your URI end point:port here for your openai inference server (such as LM Studio) 
+openai.api_base='http://localhost:1234/v1'
+# Put in an empty API Key for LM stuido
+openai.api_key=''
 
 script_path = os.path.abspath(__file__)
 directory = os.path.dirname(script_path)
@@ -72,6 +80,7 @@ for opt, arg in options:
 		print("--wakeword='string': Sets the wake word when using voice input.")
 		print("--alwayslisten: Always listen for input, not using a wake word.")
 		print("--ooba: Use local oobabooga webui as LLM instead of YouChat.")
+		print("--openai: Use openai api as LLM instead of YouChat.")
 		print("--vosk: Use local vosk as STT instead of Google.")
 		print("--chara='filename': Load tavernai character card or oobabooga character json file.")
 		print("--moegoe: Use moegoe as TTS instead of default TTS.")
@@ -106,6 +115,8 @@ for opt, arg in options:
 		alwayslisten = True
 	elif opt == "--ooba":
 		ooba = True
+	elif opt == "--openai":
+		openaiapi = True
 	elif opt == "--vosk":
 		vosk = True
 	elif opt == "--chara":
@@ -203,7 +214,7 @@ if moegoe == True:
 # pong = mixer.Sound("pong.wav")
 
 #Initialize the cloudflare scraper that we use for youchat requests
-if not ooba:
+if not ooba and not openaiapi:
 	scraper = cloudscraper.create_scraper(ecdhCurve='secp384r1')
 
 #New traceid function. This fetches the needed traceid for youchat to function
@@ -227,7 +238,7 @@ def getinitialtraceid():
 	first_capture_group = match.group(1)
 	#print("traceid:", first_capture_group)
 	return first_capture_group
-if not ooba:
+if not ooba and not openaiapi:
 	traceid = getinitialtraceid()
 	randuuid = str(random.random())[2:]
 #print("Random UUID:", randuuid)
@@ -384,8 +395,8 @@ if greeting != "":
 		mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
 	playaudio()
 
-#oobasendq is the oobabooga api request. Just enter prompt for the parameter and we get the response back
-def oobasendq(question):
+#Creates the prompt for non-youchat apis
+def createprompt(question):
 	global chat
 	prompt = ""
 	#Handle legacy prompt context
@@ -393,9 +404,6 @@ def oobasendq(question):
 		chat.append({"question":'"'+promptcontext+'"', "answer":''})
 	else:
 		prompt = promptcontext+"\n"
-
-	#Set stopping strings. This tells LLM to stop writing.
-	stopping_strings = ["\n"+yourname, "\n"+charactername]
 	
 	#characterpersona = "You are chatting with Bot. Bot is an AI assistant that helps answer your questions."
 
@@ -420,6 +428,45 @@ def oobasendq(question):
 	prompt += '\n'+yourname+': '
 	prompt += question
 	prompt += '\n'+charactername+': '
+	return prompt
+
+#openaisendq is the openai api request.
+def openaisendq(question):
+	global chat
+
+	prompt = createprompt(question)
+
+	#Set stopping strings. This tells LLM to stop writing.
+	stopping_strings = ["\n"+yourname, "\n"+charactername, "<STOP>", "<END>", "<START>"]
+
+	#formatted_prompt = f"{yourname}: {question}\n{charactername}:"
+	messages = [{"role": "user", "content": prompt}]
+	response = openai.ChatCompletion.create(
+		model="local model",
+		messages=messages,
+		stop=stopping_strings,
+		temperature=0.0
+		# temperature=0.7,
+		# rep_pen = 1.18,
+		# top_p = 1
+	)
+	output = response.choices[0].message["content"]
+	#Append message to chat history
+	if caphistory >= 0:
+		if len(chat) > caphistory:
+			chat = chat[:0-caphistory]
+	chat.append({"question":'"'+question+'"', "answer":'"'+output+'"'})
+	return output
+
+#oobasendq is the oobabooga api request. Just enter prompt for the parameter and we get the response back
+def oobasendq(question):
+	global chat
+
+	prompt = createprompt(question)
+
+	#Set stopping strings. This tells LLM to stop writing.
+	stopping_strings = ["\n"+yourname, "\n"+charactername]
+
 	#print(prompt)
 	#Send the request
 	data = {"prompt": prompt, "stopping_strings": stopping_strings, "temperature": 0.7, "rep_pen": 1.18, "top_p":1}
@@ -431,10 +478,6 @@ def oobasendq(question):
 			print(response.content)
 		jsondata = json.loads(response.content.decode('utf-8'))
 		output = str(jsondata['results'][0]['text']).strip()
-		# print("---")
-		# print("Output: ",output)
-		# print("---")
-		#output = output.split(yourname+":", 1)[0]
 
 		#Append message to chat history
 		if caphistory >= 0:
@@ -553,6 +596,8 @@ if textinput:
 		#Send prompt to LLM
 		if ooba:
 			out = oobasendq(input_string)
+		elif openaiapi:
+			out = openaisendq(input_string)
 		else:
 			#Youchat
 			out = sendq(combinedprompt)
@@ -663,6 +708,8 @@ else:
 			combinedprompt = textg
 		if ooba:
 			out = oobasendq(textg)
+		elif openaiapi:
+			out = openaisendq(textg)
 		else:
 			#Youchat
 			out = sendq(combinedprompt)
