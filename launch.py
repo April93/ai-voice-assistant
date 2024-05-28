@@ -5,8 +5,9 @@ from whisper_mic.whisper_mic import WhisperMic
 #pyttsx3 is our tts engine
 import pyttsx3
 #Load other TTS
-#from TTS.api import TTS
 import mymoegoe.tts as mytts
+import xtts.tts as xtts
+import xtts.stream as xttsstream
 #Pygame is used to play the wav audio files that pyttsx3 generates
 # import os
 # os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
@@ -38,7 +39,7 @@ import os
 argsv = sys.argv[1:]
 options, args = getopt.getopt(argsv, 'hv',
 	["vbcable", "voiceinput", "pc=", "pcaschat", "caphistory=", "voice=", "voices", "wakeword=", 
-	"alwayslisten", "ooba", "openai", "vosk", "googlestt", "chara=", "moegoe", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel='])
+	"alwayslisten", "ooba", "openai", "vosk", "googlestt", "chara=", "moegoe", "xtts", "bootmsg=", "wakeprompt", "nowakeping", 'voicespeed=', 'mgmodel=', 'template='])
 
 #Config variables
 vbcable = False
@@ -47,21 +48,25 @@ wakeword = "computer"
 promptcontext = ""
 promptcontextaschat = False
 caphistory = 4
-voice = 0
+voice = None
 alwayslisten = False
 waketext = ""
 ooba = False
 openaiapi = False
 vosk = False
 googlestt = False
-moegoe = False
+ttsengine = "pyttsx3"
 wakeprompt = False
 wakeping = True
 charafilename = ""
 speed = 1 
 bootmsg = "Booting Up"
 mgmodel = "g"
+xttsmodel = "base v2.0.2"
 verbose = False
+chatml = False
+phi3 = False
+streamchunks = 20
 
 # Put your URI end point:port here for your openai inference server (such as LM Studio) 
 openai.api_base='http://localhost:1234/v1'
@@ -79,7 +84,7 @@ for opt, arg in options:
 		print("--pc='string': set a prompt context. To prepend to prompts. Optionally can be set as fake history.")
 		print("--pcaschat: Sets prompt context to be a fake chat history.")
 		print("--caphistory=number: Caps chat history length. Default is 4. Set to -1 to disable.")
-		print("--voice=number: Set the TTS voice.")
+		print("--voice=number/string: Set the TTS voice.")
 		print("--voices: List voices on your computer.")
 		print("--wakeword='string': Sets the wake word when using voice input.")
 		print("--alwayslisten: Always listen for input, not using a wake word.")
@@ -89,11 +94,13 @@ for opt, arg in options:
 		print("--googlestt: Use google's online service as STT.")
 		print("--chara='filename': Load tavernai character card or oobabooga character json file.")
 		print("--moegoe: Use moegoe as TTS instead of default TTS.")
+		print("--xtts: Use xtts as TTS instead of default TTS.")
 		print("--bootmsg='string': What to say when booting up.")
 		print("--wakeprompt: Like alwayslisten, but doesn't prompt unless wakeword is included.")
 		print("--nowakeping: Doesn't ping when starting to listen for wake word")
 		print("--voicespeed=number: Speed of moegoe tts. Higher=slower. default is 1.")
 		print("--mgmodel='filename': set the filename of the moegoe model. default is g")
+		print("--template='string': specify a prompt template (chatml or phi3). default typical chat format.")
 		print("-v: Print debug info.")
 		sys.exit(2)
 	elif opt == '--vbcable':
@@ -107,7 +114,7 @@ for opt, arg in options:
 	elif opt == "--caphistory":
 		caphistory = int(arg)
 	elif opt == '--voice':
-		voice = int(arg)
+		voice = arg
 	elif opt == '--voices':
 		engine = pyttsx3.init()
 		voices = engine.getProperty('voices')
@@ -129,7 +136,9 @@ for opt, arg in options:
 	elif opt == "--chara":
 		charafilename = arg
 	elif opt == "--moegoe":
-		moegoe = True
+		ttsengine = "moegoe"
+	elif opt == "--xtts":
+		ttsengine = "xtts"
 	elif opt == "--bootmsg":
 		bootmsg = arg
 	elif opt == "--wakeprompt":
@@ -140,6 +149,12 @@ for opt, arg in options:
 		speed = float(arg)
 	elif opt == "--mgmodel":
 		mgmodel = arg
+		xttsmodel = arg
+	elif opt == "--template":
+		if arg == "chatml":
+			chatml = True
+		if arg == "phi3":
+			phi3 = True
 	elif opt == "-v":
 		verbose = True
 
@@ -176,6 +191,29 @@ def playaudio():
 		sd.wait()
 	else:
 		print("Generated TTS audio temp.wav not found!")
+def playstream(audio_stream, stream1, stream2):
+	for chunk in audio_stream:
+		#Get chunk data into np format (pcm audio samples)
+		audio_pcm = np.frombuffer(chunk, dtype=np.int16)
+		# Convert PCM audio samples to 32-bit floating-point values
+		#data_float = audio_pcm.astype(np.float32) / 32768.0
+		stream1.write(audio_pcm)
+		if stream2 != None:
+			stream2.write(audio_pcm)
+
+def playaudiostream(audio_stream):
+	# xttsstream.stream_ffplay(audio_stream)
+	with sd.OutputStream(device=sd.default.device,
+								samplerate=24000,
+								channels=1, blocksize=44544, latency=1, dtype='int16') as stream1:
+		if vbcable:
+			with sd.OutputStream(device=vbcable_input,
+								samplerate=24000,
+								channels=1, blocksize=44544, latency=1, dtype='int16') as stream2:
+				playstream(audio_stream, stream1, stream2)
+		else:
+			playstream(audio_stream, stream1, None)
+
 def playchime(pingpong="ping"):
 	data, fs = sf.read(os.path.join(directory,pingpong+".wav"), dtype='float32')
 	sd.play(data, fs, device=sd.default.device)
@@ -191,30 +229,38 @@ def playchime(pingpong="ping"):
 #print("Outputs:", devices.audio.get_audio_device_names()[0])
 
 
-#Outdated TTS model
-#print(TTS.list_models())
-#model_name = TTS.list_models()[7]
-# Init TTS
-#tts = TTS(model_name)
-
 #Here we initialize the tts with a default boot message
 #voices[2].id is to get the voice we want.
-if moegoe == False:
+if ttsengine == "pyttsx3":
+	if voice == None:
+		voice = 0
 	engine = pyttsx3.init()
 	voices = engine.getProperty('voices')
 	if len(voices) == 0:
 		print("No TTS voices detected. Please install a TTS voice on your OS.")
 		sys.exit(2)
-	engine.setProperty('voice', voices[voice].id)
+	engine.setProperty('voice', voices[int(voice)].id)
 	engine.save_to_file(bootmsg, os.path.join(directory,"temp.wav"))
 	engine.runAndWait();
 	playaudio()
 #--------------------
 
-if moegoe == True:
+if ttsengine == "moegoe":
+	if voice == None:
+		voice = 0
 	mytts.loadtts(mgmodel)
-	mytts.tts(bootmsg, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
+	mytts.tts(bootmsg, os.path.join(directory,"temp.wav"), voice=int(voice), speed=speed)
 	playaudio()
+
+if ttsengine == "xtts":
+	if voice == None:
+		voice = "en_sample"
+	xttsstream.loadModel(xttsmodel, voice=voice)
+	speaker = xttsstream.get_speaker(xttsstream.reference)
+	audio = playaudiostream(xttsstream.tts(bootmsg, speaker, "en", streamchunks))
+	#xtts.loadModel(xttsmodel, voice=voice)
+	#xtts.generateSpeech(bootmsg, os.path.join(directory,"temp.wav"))
+	#playaudio()
 
 #Load sfx
 # ping = mixer.Sound("ping.wav")
@@ -309,9 +355,9 @@ def sendq(question):
 
 #Initialize Character Persona Details for Ooba LLM
 yourname = "You"
-charactername = "Bot"
+charactername = "Friend"
 characterpersona = ""
-worldscenario = "You are chatting with Bot, your AI assistant. Bot responds only with one or two sentences and keeps responses brief."
+worldscenario = "Reply as the user's friend. Make up details about yourself. Do not mention or say you are an AI. Respond only with one or two sentences and keeps responses brief."
 exampledialogue = ""
 exampledialogue = re.sub(r'{{char}}', charactername, exampledialogue)
 exampledialogue = re.sub(r'{{user}}', yourname, exampledialogue)
@@ -395,17 +441,39 @@ if greeting != "":
 	out = re.sub("[^\x00-\x7F]+", "", out)
 	out = re.sub("[<>]", "", out)
 	out = re.sub("-", " - ", out)
-	if moegoe == False:
+	if ttsengine == "pyttsx3":
 		engine.save_to_file(out, os.path.join(directory,"temp.wav"))
 		engine.runAndWait();
-	if moegoe == True:
-		mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
-	playaudio()
+	if ttsengine == "moegoe":
+		mytts.tts(out, os.path.join(directory,"temp.wav"), voice=int(voice), speed=speed)
+	if ttsengine == "xtts":
+		audio = playaudiostream(xttsstream.tts(out, speaker, "en", streamchunks))
+		#xtts.generateSpeech(out, os.path.join(directory,"temp.wav"))
+	if ttsengine != "xtts":
+		playaudio()
 
 #Creates the prompt for non-youchat apis
 def createprompt(question):
-	global chat
+	global chat, yourname, charactername
 	prompt = ""
+
+	#ChatML
+	promptuserstart = "<|im_start|>"
+	promptend = "<|im_end|>"
+	promptassistantstart = "<|im_start|>"
+
+	#Phi 3
+	if phi3:
+		promptuserstart = "<|user|>"
+		promptend = "<|end|>"
+		promptassistantstart = "<|assistant|>"
+
+	if chatml:
+		prompt = promptuserstart+"system\n"
+		yourname = "user"
+		charactername = "assistant"
+	if phi3:
+		prompt = "<|system|>"#promptuserstart+"\n"
 	#Handle legacy prompt context
 	if promptcontextaschat:
 		chat.append({"question":'"'+promptcontext+'"', "answer":''})
@@ -419,22 +487,40 @@ def createprompt(question):
 		prompt += charactername+"'s Persona: "+characterpersona+"\n"
 	if worldscenario != "":
 		prompt += "Scenario: "+worldscenario+"\n"
-	if exampledialogue != "":
+	if exampledialogue != "" and not chatml and not phi3:
 		prompt += "<START>"+"\n"+exampledialogue+"\n"
-	if characterpersona != "" or worldscenario != "" or exampledialogue != "":
+	if (characterpersona != "" or worldscenario != "" or exampledialogue != "") and not chatml and not phi3:
 		prompt += "<START>"
+
+	if chatml:
+		prompt += promptend+"\n"
 
 	#Add Chat History to Prompt
 	for ch in chat:
 		if ch["question"] != "":
-			prompt += '\n'+yourname+': '+ch["question"]
+			if chatml:
+				prompt += promptuserstart+yourname+"\n"+ch["question"]+promptend+"\n"
+			elif phi3:
+				prompt += promptuserstart+"\n"+ch["question"]+promptend+"\n"
+			else:
+				prompt += '\n'+yourname+': '+ch["question"]
 		if ch["answer"] != "":
-			prompt += '\n'+charactername+': '+ch["answer"]
+			if chatml:
+				prompt += promptassistantstart+charactername+"\n"+ch["answer"]+promptend+"\n"
+			elif phi3:
+				prompt += promptassistantstart+"\n"+ch["answer"]+promptend+"\n"
+			else:
+				prompt += '\n'+charactername+': '+ch["answer"]
 
 	#Add newest chat to prompt
-	prompt += '\n'+yourname+': '
-	prompt += question
-	prompt += '\n'+charactername+': '
+	if chatml:
+		prompt += promptuserstart+yourname+"\n"+question+promptend+"\n"+promptassistantstart+charactername+"\n"
+	elif phi3:
+		prompt += promptuserstart+"\n"+question+promptend+"\n"+promptassistantstart+"\n"
+	else:
+		prompt += '\n'+yourname+': '
+		prompt += question
+		prompt += '\n'+charactername+': '
 	return prompt
 
 #openaisendq is the openai api request.
@@ -444,7 +530,7 @@ def openaisendq(question):
 	prompt = createprompt(question)
 
 	#Set stopping strings. This tells LLM to stop writing.
-	stopping_strings = ["\n"+yourname, "\n"+charactername, "<STOP>", "<END>", "<START>"]
+	stopping_strings = ["\n"+yourname, "\n"+charactername, "<STOP>", "<END>", "<START>", "<|im_end|>", "<|im_start|>", "<|user|>", "<|end|>", "<|assistant|>"]
 
 	#formatted_prompt = f"{yourname}: {question}\n{charactername}:"
 	messages = [{"role": "user", "content": prompt}]
@@ -452,7 +538,7 @@ def openaisendq(question):
 		model=openaimodel,
 		messages=messages,
 		stop=stopping_strings,
-		temperature=0.0
+		#temperature=0.0
 		# temperature=0.7,
 		# rep_pen = 1.18,
 		# top_p = 1
@@ -496,52 +582,6 @@ def oobasendq(question):
 	else:
 		return "Error"
 
-
-#Wait for speech detected by google
-# def getaudiogoogle():
-# 	global ping
-# 	text = ""
-# 	firstit = True
-# 	while text == "":
-# 		r = sr.Recognizer()
-# 		with sr.Microphone() as source:
-# 			r.adjust_for_ambient_noise(source)
-# 			if firstit:
-# 				if (wake and wakeping) or (not wake):
-# 					playchime("ping")
-# 				firstit = False
-# 			print("Listening for Google!")
-# 			audio = r.listen(source)
-# 		try:
-# 			text = r.recognize_google(audio)
-# 			text = text.lower()
-# 		except:
-# 			print("Failed to recognize")
-# 			text = ""
-# 	return text
-
-# #Wait for speech detected by vosk
-# def getaudiovosk():
-# 	global ping
-# 	text = ""
-# 	firstit = True
-# 	while text == "":
-# 		r = sr.Recognizer()
-# 		with sr.Microphone() as source:
-# 			r.adjust_for_ambient_noise(source)
-# 			if firstit:
-# 				if (wake and wakeping) or (not wake):
-# 					playchime("ping")
-# 				firstit = False
-# 			print("Listening for Vosk!")
-# 			audio = r.listen(source)
-# 		try:
-# 			text = r.recognize_vosk(audio)
-# 			text = text.lower()
-# 		except:
-# 			print("Failed to recognize")
-# 			text = ""
-# 	return json.loads(text)["text"]
 
 def getaudiovosknew(r, m, wake=False):
 	global ping
@@ -612,30 +652,43 @@ if textinput:
 
 		#Print response
 		print(charactername+":", out)
+		end_time = time.time()
+		elapsed_time = end_time - start_time
+		if verbose:
+			print("Text-Gen time: ", elapsed_time, "seconds")
 
 		#Clear out string to ensure TTS doesn't crash
 		out = re.sub("\n", "", out)
 		out = re.sub("[\"\']", "", out)
 		out = re.sub("[^\x00-\x7F]+", "", out)
 		out = re.sub("[<>]", "", out)
-		out = re.sub("-", " - ", out)
+		out = re.sub("-", " ", out)
 		if out and out != "":
 			# Text to speech to a file
 			#tts.tts_to_file(text=out, file_path="temp.wav")
-			if moegoe == False:
+			if ttsengine == "pyttsx3":
 				engine.save_to_file(out, os.path.join(directory,"temp.wav"))
 				engine.runAndWait();
-			else:
-				mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
+			elif ttsengine == "moegoe":
+				mytts.tts(out, os.path.join(directory,"temp.wav"), voice=int(voice), speed=speed)
+			elif ttsengine == "xtts":
+				#xtts.generateSpeech(out, os.path.join(directory,"temp.wav"))
+				end_time = time.time()
+				elapsed_time = end_time - start_time
+				if verbose:
+					print("Elapsed time: ", elapsed_time, "seconds")
+				audio = playaudiostream(xttsstream.tts(out, speaker, "en", streamchunks))
 			
 			#Calculate and print time if verbose
-			end_time = time.time()
-			elapsed_time = end_time - start_time
-			if verbose:
-				print("Elapsed time: ", elapsed_time, "seconds")
-			threadaudio = threading.Thread(target=playaudio)
-			threadaudio.start()
-			threadaudio.join()
+
+			if ttsengine != "xtts":
+				end_time = time.time()
+				elapsed_time = end_time - start_time
+				if verbose:
+					print("Elapsed time: ", elapsed_time, "seconds")
+				threadaudio = threading.Thread(target=playaudio)
+				threadaudio.start()
+				threadaudio.join()
 			#playaudio()
 			#mixer.music.load("temp.wav")
 			#mixer.music.play()
@@ -746,21 +799,29 @@ else:
 		out = re.sub("\"", "", out)
 		out = re.sub("[^\x00-\x7F]+", "", out)
 		out = re.sub("[<>]", "", out)
-		out = re.sub("-", " - ", out)
+		out = re.sub("-", " ", out)
 		if out and out != "":
-			if moegoe == False:
+			if ttsengine == "pyttsx3":
 				engine.save_to_file(out, os.path.join(directory,"temp.wav"))
 				engine.runAndWait();
-			else:
-				mytts.tts(out, os.path.join(directory,"temp.wav"), voice=voice, speed=speed)
+			elif ttsengine == "moegoe":
+				mytts.tts(out, os.path.join(directory,"temp.wav"), voice=int(voice), speed=speed)
+			elif ttsengine == "xtts":
+				#xtts.generateSpeech(out, os.path.join(directory,"temp.wav"))
+				end_time = time.time()
+				elapsed_time = end_time - start_time
+				if verbose:
+					print("Elapsed time: ", elapsed_time, "seconds")
+				audio = playaudiostream(xttsstream.tts(out, speaker, "en", streamchunks))
 			
 			#Calculate and print time if verbose
-			end_time = time.time()
-			elapsed_time = end_time - start_time
-			if verbose:
-				print("Elapsed time: ", elapsed_time, "seconds")
-			threadaudio = threading.Thread(target=playaudio)
-			threadaudio.start()
-			threadaudio.join()
+			if ttsengine != "xtts":
+				end_time = time.time()
+				elapsed_time = end_time - start_time
+				if verbose:
+					print("Elapsed time: ", elapsed_time, "seconds")
+				threadaudio = threading.Thread(target=playaudio)
+				threadaudio.start()
+				threadaudio.join()
 			#playaudio()
 		#-------------------

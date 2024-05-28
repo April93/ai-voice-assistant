@@ -21,6 +21,10 @@ Use `--vosk` to run with vosk speech recognition instead of the default whisper 
 
 A modified version of moegoe is included in the repo. To use it, place a compatible `.pth` and `.json` model in `mymoegoe/models/` ensuring both the pth and json have the same name, then launch the script with `--moegoe`. The script assumes a model named `g.pth` and `g.json`. You can manually select it by launching with `--mgmodel modelnamehere` for example: `--mgmodel g` without file extensions. If the voice is too fast or too slow, you can modify the speed with `--voicespeed 1.0` adjusting the number (higher is slower). A popular model with thousands of anime voices can be found [here.](https://huggingface.co/spaces/skytnt/moe-tts/tree/main/saved_model/15)
 
+### XTTS
+
+Use XTTS-v2 as the TTS engine by launching the script with `--xtts`. The script requires that you place the XTTS model in `xtts/models`. The expected default model name is `base v2.0.2`.  You can use a reference voice by placing a wav file in `xtts/voices` and launching the script with both `--xtts` as well as `--voice filename` without the wav extension. By default, `xtts/voices/en_sample.wav` file is used as a reference. The XTTS-v2 model can be found [here.](https://huggingface.co/coqui/XTTS-v2)
+
 ### Anime character visualization with VMagicMirror and VB-Cable
 
 For windows and mac it's possible to install [VB-Cable](https://vb-audio.com/Cable/) and [VMagicMirror](https://github.com/malaybaku/VMagicMirror/) to send the TTS output to an on screen anime character. Launch the script with `--vbcable` to send TTS to vbcable. Then run VMagicMirror and set the microphone to the virtual VB-Cable microphone.
@@ -34,7 +38,7 @@ For windows and mac it's possible to install [VB-Cable](https://vb-audio.com/Cab
 |`--pc='string'`|set a prompt context. To prepend to prompts. Optionally can be set as fake history.|
 |`--pcaschat`|Sets prompt context to be a fake chat history.|
 |`--caphistory=number`|Caps chat history length. Default is 4. Set to -1 to disable.|
-|`--voice=number`|Set the TTS voice.|
+|`--voice=number/string`|Set the TTS voice.|
 |`--voices`|List voices on your computer.|
 |`--wakeword='string'`|Sets the wake word when using voice input.|
 |`--alwayslisten`|Always listen for input, not using a wake word.|
@@ -44,9 +48,11 @@ For windows and mac it's possible to install [VB-Cable](https://vb-audio.com/Cab
 |`--googlestt`|Use google's online service as STT.|
 |`--chara='filename'`|Load tavernai character card or oobabooga character json file.|
 |`--moegoe`|Use moegoe as TTS instead of default TTS.|
+|`--xtts`|Use xtts as TTS instead of default TTS.|
 |`--bootmsg='string'`|What to say when booting up.|
 |`--wakeprompt`|Like alwayslisten, but doesn't prompt unless wakeword is included.|
 |`--nowakeping`|Doesn't ping when starting to listen for wake word|
 |`--voicespeed=number`|Speed of moegoe tts. Higher=slower. default is 1.|
 |`--mgmodel='filename'`|set the filename of the moegoe model. default is g|
+|`--template='string'`|specify a prompt template (chatml or phi3). default typical chat format.|
 |`-v`|Print debug info.|
